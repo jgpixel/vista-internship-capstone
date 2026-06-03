@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import Post from '../models/Post.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
+import { encodeCursor, decodeCursor } from '../utils/cursor.js';
 import { POST_PLATFORMS, POST_STATUSES, POST_ALLOWED_UPDATES } from '../constants/post.constants.js';
 
 export const createPost = asyncHandler(async (req, res) => {
@@ -37,12 +38,12 @@ export const createPost = asyncHandler(async (req, res) => {
   }
 
   if (!mongoose.isValidObjectId(socialAccountId)) {
-  throw new AppError(
-    422,
-    'VALIDATION_ERROR',
-    'Invalid socialAccountId'
-  );
-}
+    throw new AppError(
+      422,
+      'VALIDATION_ERROR',
+      'Invalid socialAccountId'
+    );
+  }
 
   if (!POST_PLATFORMS.includes(platform)) {
     throw new AppError(
@@ -76,7 +77,10 @@ export const createPost = asyncHandler(async (req, res) => {
 });
 
 export const getPosts = asyncHandler(async (req, res) => {
-  const { platform, status } = req.query;
+  const { platform, status, cursor } = req.query;
+
+  // Caps pagination to 50 posts, defaults to 10
+  const limit = Math.min(Number(req.query.limit) || 10, 50);
 
   if (platform && !POST_PLATFORMS.includes(platform)) {
     throw new AppError(
@@ -106,10 +110,58 @@ export const getPosts = asyncHandler(async (req, res) => {
     filter.status = status;
   }
 
-  const posts = await Post.find(filter).sort({ scheduledAt: 1 });
+  if (cursor) {
+    const decodedCursor = decodeCursor(cursor);
+
+    if (
+      !decodedCursor ||
+      !decodedCursor.scheduledAt ||
+      !decodedCursor.id ||
+      Number.isNaN(new Date(decodedCursor.scheduledAt).getTime()) ||
+      !mongoose.isValidObjectId(decodedCursor.id)
+    ) {
+      throw new AppError(
+        400,
+        'INVALID_CURSOR',
+        'Invalid cursor'
+      );
+    }
+
+    // Cursor pagination: fetch posts after the last post from the previous page.
+    // Since posts are sorted by scheduledAt first, then _id, we get posts with a later
+    // scheduledAt OR posts at the same scheduledAt with a greater _id as the tie-breaker.
+    filter.$or = [
+      {
+        scheduledAt: {
+          $gt: new Date(decodedCursor.scheduledAt)
+        }
+      },
+      {
+        scheduledAt: new Date(decodedCursor.scheduledAt),
+        _id: {
+          $gt: decodedCursor.id
+        }
+      }
+    ];
+  }
+
+  // Extra post is fetched (limit + 1) to tell us if there are more posts after this
+  const posts = await Post.find(filter)
+    .sort({ scheduledAt: 1, _id: 1 })
+    .limit(limit + 1);
+
+  const hasNextPage = posts.length > limit;
+  const pagePosts = hasNextPage ? posts.slice(0, limit) : posts;
+
+  const nextCursor = hasNextPage
+    ? encodeCursor(pagePosts[pagePosts.length - 1])
+    : null;
 
   return res.status(200).json({
-    data: posts
+    data: pagePosts,
+    page: {
+      nextCursor
+    }
   });
 });
 
