@@ -13,6 +13,58 @@ import { postQueue } from '../config/queue.js';
 import { encodeCursor, decodeCursor } from '../utils/cursor.js';
 import { POST_PLATFORMS, POST_STATUSES, POST_ALLOWED_UPDATES } from '../constants/post.constants.js';
 
+function getPublishJobOptions(scheduledAt) {
+  const delay = new Date(scheduledAt).getTime() - Date.now();
+
+  return {
+    delay: Math.max(delay, 0),
+    attempts: 3,
+    backoff: {
+      type: 'exponential',
+      delay: 1000
+    },
+    removeOnComplete: true,
+    removeOnFail: false
+  };
+}
+
+async function reschedulePostJob(post, userId) {
+  const postJob = await PostJob.findOne({
+    postId: post._id,
+    userId
+  });
+
+  if (!postJob) {
+    return;
+  }
+
+  if (postJob.bullJobId) {
+    const existingBullJob = await postQueue.getJob(postJob.bullJobId);
+
+    if (existingBullJob) {
+      await existingBullJob.remove();
+    }
+  }
+
+  const bullJob = await postQueue.add(
+    'publish-post',
+    {
+      postId: post._id.toString()
+    },
+    getPublishJobOptions(post.scheduledAt)
+  );
+
+  postJob.bullJobId = bullJob.id;
+  postJob.status = 'queued';
+  postJob.attempts = 0;
+  postJob.lastError = null;
+  postJob.lockedAt = null;
+  postJob.completedAt = null;
+  postJob.failedAt = null;
+
+  await postJob.save();
+}
+
 export const createPost = asyncHandler(async (req, res) => {
   const idempotencyKey = req.get('Idempotency-Key');
 
@@ -100,23 +152,12 @@ export const createPost = asyncHandler(async (req, res) => {
     status: 'scheduled',
   });
 
-  const delay = new Date(scheduledAt).getTime() - Date.now();
-
   const bullJob = await postQueue.add(
     'publish-post',
     {
       postId: post._id.toString()
     },
-    {
-      delay: Math.max(delay, 0),
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 1000
-      },
-      removeOnComplete: true,
-      removeOnFail: false
-    }
+    getPublishJobOptions(scheduledAt)
   );
 
   await PostJob.create({
@@ -316,6 +357,10 @@ export const updatePost = asyncHandler(async (req, res) => {
       'POST_NOT_FOUND',
       'Post not found'
     );
+  }
+
+  if (updates.scheduledAt && post.status === 'scheduled') {
+    await reschedulePostJob(post, req.user.id);
   }
 
   await invalidateUpcomingPostsCache(req.user.id);
