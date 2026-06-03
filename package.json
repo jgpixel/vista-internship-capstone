@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "worker": "nodemon src/workers/postWorker.js",
-    "test": "jest"
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest --runInBand"
   },
   "keywords": [],
   "author": "",
