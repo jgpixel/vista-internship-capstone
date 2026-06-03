@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import Post from '../models/Post.js';
 import SocialAccount from '../models/SocialAccount.js';
+import PostJob from '../models/PostJob.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import {
@@ -8,6 +9,7 @@ import {
   setCachedUpcomingPosts,
   invalidateUpcomingPostsCache
 } from '../services/cache.service.js';
+import { postQueue } from '../config/queue.js';
 import { encodeCursor, decodeCursor } from '../utils/cursor.js';
 import { POST_PLATFORMS, POST_STATUSES, POST_ALLOWED_UPDATES } from '../constants/post.constants.js';
 
@@ -96,6 +98,32 @@ export const createPost = asyncHandler(async (req, res) => {
     scheduledAt,
     idempotencyKey,
     status: 'scheduled',
+  });
+
+  const delay = new Date(scheduledAt).getTime() - Date.now();
+
+  const bullJob = await postQueue.add(
+    'publish-post',
+    {
+      postId: post._id.toString()
+    },
+    {
+      delay: Math.max(delay, 0),
+      attempts: 3,
+      backoff: {
+        type: 'exponential',
+        delay: 1000
+      },
+      removeOnComplete: true,
+      removeOnFail: false
+    }
+  );
+
+  await PostJob.create({
+    postId: post._id,
+    userId: req.user.id,
+    bullJobId: bullJob.id,
+    status: 'queued'
   });
 
   await invalidateUpcomingPostsCache(req.user.id);
