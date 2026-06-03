@@ -6,6 +6,7 @@ import { connection, postDeadLetterQueue } from '../config/queue.js';
 import Post from '../models/Post.js';
 import PostJob from '../models/PostJob.js';
 import { invalidateUpcomingPostsCache } from '../services/cache.service.js';
+import getPlatformStrategy from '../strategies/platform.strategy.js';
 
 dotenv.config();
 
@@ -63,7 +64,15 @@ const worker = new Worker(
     // Uncomment to test DLQ/failed schedule
     // throw new Error('Forced publish failure');
 
-    console.log(`Publishing ${post.platform} post: ${post.content}`);
+    const strategy = getPlatformStrategy(post.platform);
+
+    if (!strategy) {
+      throw new Error(`No publishing strategy found for platform: ${post.platform}`);
+    }
+
+    const formattedContent = strategy.format(post.content);
+
+    console.log(`Publishing ${post.platform} post: ${formattedContent}`);
 
     post.status = 'published';
     post.publishedAt = new Date();
