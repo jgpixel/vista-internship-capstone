@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { Worker } from 'bullmq';
 import connectDb from '../config/db.js';
 import { connectRedis } from '../config/redis.js';
-import { connection } from '../config/queue.js';
+import { connection, postDeadLetterQueue } from '../config/queue.js';
 import Post from '../models/Post.js';
 import PostJob from '../models/PostJob.js';
 import { invalidateUpcomingPostsCache } from '../services/cache.service.js';
@@ -60,6 +60,9 @@ const worker = new Worker(
     post.status = 'publishing';
     await post.save();
 
+    // Uncomment to test DLQ/failed schedule
+    // throw new Error('Forced publish failure');
+
     console.log(`Publishing ${post.platform} post: ${post.content}`);
 
     post.status = 'published';
@@ -84,6 +87,56 @@ worker.on('completed', (job) => {
 
 worker.on('failed', async (job, err) => {
   console.error(`Job ${job?.id} failed:`, err.message);
+
+  if (!job) {
+    return;
+  }
+
+  const maxAttempts = job.opts.attempts || 1;
+  const isFinalAttempt = job.attemptsMade >= maxAttempts;
+
+  if (!isFinalAttempt) {
+    return;
+  }
+
+  const { postId } = job.data;
+
+  await PostJob.findOneAndUpdate(
+    {
+      postId
+    },
+    {
+      status: 'dead',
+      lastError: err.message,
+      failedAt: new Date()
+    },
+    {
+      returnDocument: 'after',
+      runValidators: true
+    }
+  );
+
+  const post = await Post.findByIdAndUpdate(
+    postId,
+    {
+      status: 'failed'
+    },
+    {
+      returnDocument: 'after',
+      runValidators: true
+    }
+  );
+
+  await postDeadLetterQueue.add('dead-post-job', {
+    postId,
+    originalJobId: job.id,
+    error: err.message,
+    failedAt: new Date().toISOString()
+  });
+
+  if (post) {
+    await invalidateUpcomingPostsCache(post.userId.toString());
+  }
 });
 
 console.log('Post worker running');

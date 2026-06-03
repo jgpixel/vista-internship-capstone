@@ -9,4 +9,8 @@ export const postQueue = new Queue('post-publishing', {
   connection
 });
 
+export const postDeadLetterQueue = new Queue('post-publishing-dlq', {
+  connection
+});
+
 export { connection };
