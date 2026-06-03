@@ -3,6 +3,11 @@ import Post from '../models/Post.js';
 import SocialAccount from '../models/SocialAccount.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
+import {
+  getCachedUpcomingPosts,
+  setCachedUpcomingPosts,
+  invalidateUpcomingPostsCache
+} from '../services/cache.service.js';
 import { encodeCursor, decodeCursor } from '../utils/cursor.js';
 import { POST_PLATFORMS, POST_STATUSES, POST_ALLOWED_UPDATES } from '../constants/post.constants.js';
 
@@ -93,6 +98,8 @@ export const createPost = asyncHandler(async (req, res) => {
     status: 'scheduled',
   });
 
+  await invalidateUpcomingPostsCache(req.user.id);
+
   return res.status(201).json({
     data: post
   });
@@ -101,8 +108,9 @@ export const createPost = asyncHandler(async (req, res) => {
 export const getPosts = asyncHandler(async (req, res) => {
   const { platform, status, cursor } = req.query;
 
-  // Caps pagination to 50 posts, defaults to 10
-  const limit = Math.min(Number(req.query.limit) || 10, 50);
+  // Caps pagination to 50 posts, defaults to 10, prevents negative numbers
+  const requestedLimit = Number(req.query.limit) || 10;
+  const limit = Math.min(Math.max(requestedLimit, 1), 50);
 
   if (platform && !POST_PLATFORMS.includes(platform)) {
     throw new AppError(
@@ -251,6 +259,17 @@ export const updatePost = asyncHandler(async (req, res) => {
     );
   }
 
+  if (
+    updates.scheduledAt &&
+    Number.isNaN(new Date(updates.scheduledAt).getTime())
+  ) {
+    throw new AppError(
+      422,
+      'VALIDATION_ERROR',
+      'Invalid scheduledAt date'
+    );
+  }
+
   const post = await Post.findOneAndUpdate(
     {
       _id: id,
@@ -270,6 +289,8 @@ export const updatePost = asyncHandler(async (req, res) => {
       'Post not found'
     );
   }
+
+  await invalidateUpcomingPostsCache(req.user.id);
 
   return res.status(200).json({
     data: post
@@ -301,5 +322,37 @@ export const deletePost = asyncHandler(async (req, res) => {
     throw new AppError(404, 'POST_NOT_FOUND', 'Post not found');
   }
 
+  await invalidateUpcomingPostsCache(req.user.id);
+
   return res.status(204).send();
+});
+
+export const getUpcomingPosts = asyncHandler(async (req, res) => {
+  const cachedPosts = await getCachedUpcomingPosts(req.user.id);
+
+  if (cachedPosts !== null) {
+    return res.status(200).json({
+      data: cachedPosts,
+      cache: {
+        hit: true
+      }
+    });
+  }
+
+  const posts = await Post.find({
+    userId: req.user.id,
+    status: 'scheduled',
+    scheduledAt: {
+      $gt: new Date()
+    }
+  }).sort({ scheduledAt: 1, _id: 1 });
+
+  await setCachedUpcomingPosts(req.user.id, posts);
+
+  return res.status(200).json({
+    data: posts,
+    cache: {
+      hit: false
+    }
+  });
 });

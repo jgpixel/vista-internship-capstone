@@ -2,6 +2,7 @@ import express from 'express';
 import {
   createPost,
   getPosts,
+  getUpcomingPosts,
   getPost,
   updatePost,
   deletePost
@@ -9,6 +10,7 @@ import {
 
 const router = express.Router();
 
+router.get('/upcoming', getUpcomingPosts);
 router.post('/', createPost);
 router.get('/', getPosts);
 router.get('/:id', getPost);
