@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { POST_PLATFORMS, POST_STATUSES } from '../constants/post.constants.js';
 
 const postSchema = new mongoose.Schema(
   {
@@ -16,7 +17,7 @@ const postSchema = new mongoose.Schema(
 
     platform: {
       type: String,
-      enum: ['twitter', 'facebook', 'linkedin'],
+      enum: POST_PLATFORMS,
       required: true
     },
 
@@ -29,7 +30,7 @@ const postSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['draft', 'scheduled', 'publishing', 'published', 'failed', 'cancelled'],
+      enum: POST_STATUSES,
       default: 'scheduled',
       required: true
     },
