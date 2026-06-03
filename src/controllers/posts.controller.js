@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import Post from '../models/Post.js';
+import SocialAccount from '../models/SocialAccount.js';
 import AppError from '../utils/AppError.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { encodeCursor, decodeCursor } from '../utils/cursor.js';
@@ -58,6 +59,27 @@ export const createPost = asyncHandler(async (req, res) => {
       422,
       'VALIDATION_ERROR',
       'Invalid scheduledAt date'
+    );
+  }
+
+  const socialAccount = await SocialAccount.findOne({
+    _id: socialAccountId,
+    userId: req.user.id
+  });
+
+  if (!socialAccount) {
+    throw new AppError(
+      404,
+      'SOCIAL_ACCOUNT_NOT_FOUND',
+      'Social account not found'
+    );
+  }
+
+  if (socialAccount.platform !== platform) {
+    throw new AppError(
+      422,
+      'VALIDATION_ERROR',
+      'Platform does not match social account'
     );
   }
 
