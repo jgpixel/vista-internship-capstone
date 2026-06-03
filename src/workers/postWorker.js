@@ -29,11 +29,6 @@ const worker = new Worker(
       return;
     }
 
-    postJob.status = 'processing';
-    postJob.attempts = job.attemptsMade + 1;
-    postJob.lockedAt = new Date();
-    await postJob.save();
-
     const post = await Post.findById(postId);
 
     if (!post) {
@@ -44,11 +39,23 @@ const worker = new Worker(
       return;
     }
 
-    if (post.status === 'cancelled' || post.status === 'published') {
-      postJob.status = post.status === 'cancelled' ? 'cancelled' : 'succeeded';
+    if (post.status === 'published') {
+      postJob.status = 'succeeded';
+      postJob.completedAt = post.publishedAt || new Date();
       await postJob.save();
       return;
     }
+
+    if (post.status === 'cancelled') {
+      postJob.status = 'cancelled';
+      await postJob.save();
+      return;
+    }
+
+    postJob.status = 'processing';
+    postJob.attempts = job.attemptsMade + 1;
+    postJob.lockedAt = new Date();
+    await postJob.save();
 
     post.status = 'publishing';
     await post.save();
